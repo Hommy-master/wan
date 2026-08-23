@@ -1,6 +1,9 @@
+name: wan
+
 services:
   wan:
     image: gogoshine/wan:latest
+    container_name: wan
     ports:
       - "8000:8000"
     environment:
