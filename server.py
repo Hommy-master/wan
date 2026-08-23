@@ -47,12 +47,14 @@ def _sanitize_env() -> None:
 
 _sanitize_env()
 
-REQUIRED_FILES = (
-    "config.json",
-    "models_t5_umt5-xxl-enc-bf16.pth",
-    "Wan2.2_VAE.pth",
-    "google/umt5-xxl/tokenizer_config.json",
-)
+REQUIRED_FILES = {
+    "config.json": 1,
+    "models_t5_umt5-xxl-enc-bf16.pth": 5 * 1024 ** 3,
+    "Wan2.2_VAE.pth": 100 * 1024 ** 2,
+    "google/umt5-xxl/tokenizer_config.json": 1,
+}
+SAFETENSORS_MIN_BYTES = 100 * 1024 ** 2
+CACHE_DIR_NAMES = {".cache", ".hf_home", ".modelscope", ".git"}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -86,24 +88,45 @@ def path_to_url(abs_path: str) -> str:
     return download_url + os.path.basename(normalized)
 
 
+def _walk_checkpoint(root: str):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [name for name in dirnames if name not in CACHE_DIR_NAMES]
+        yield dirpath, filenames
+
+
 def _has_incomplete(root: str) -> bool:
-    for dirpath, _, filenames in os.walk(root):
+    for _, filenames in _walk_checkpoint(root):
         for name in filenames:
             if name.endswith(".incomplete") or name.endswith(".lock"):
                 return True
     return False
 
 
-def _has_required_files(root: str) -> bool:
-    for rel in REQUIRED_FILES:
+def _missing_required(root: str) -> list[str]:
+    missing = []
+    for rel, min_size in REQUIRED_FILES.items():
         path = os.path.join(root, rel)
-        if not os.path.isfile(path) or os.path.getsize(path) <= 0:
-            return False
-    for dirpath, _, filenames in os.walk(root):
+        if not os.path.isfile(path):
+            missing.append(rel)
+            continue
+        size = os.path.getsize(path)
+        if size < min_size:
+            missing.append(f"{rel} ({size} bytes)")
+    has_weights = False
+    for dirpath, filenames in _walk_checkpoint(root):
         for name in filenames:
-            if name.endswith(".safetensors") and os.path.getsize(os.path.join(dirpath, name)) > 0:
-                return True
-    return False
+            if name.endswith(".safetensors") and os.path.getsize(os.path.join(dirpath, name)) >= SAFETENSORS_MIN_BYTES:
+                has_weights = True
+                break
+        if has_weights:
+            break
+    if not has_weights:
+        missing.append("*.safetensors")
+    return missing
+
+
+def _has_required_files(root: str) -> bool:
+    return not _missing_required(root)
 
 
 def _hf_sizes_match(root: str, repo_id: str) -> bool:
@@ -115,6 +138,8 @@ def _hf_sizes_match(root: str, repo_id: str) -> bool:
         size = getattr(item, "size", None)
         path = getattr(item, "path", None)
         if not path or size is None:
+            continue
+        if path.split("/", 1)[0] in CACHE_DIR_NAMES:
             continue
         local = os.path.join(root, path)
         if not os.path.isfile(local) or os.path.getsize(local) != size:
@@ -139,15 +164,7 @@ def is_model_complete(root: str) -> bool:
     return True
 
 
-def download_model(root: str) -> None:
-    os.makedirs(root, exist_ok=True)
-    if MODEL_SOURCE == "modelscope":
-        logger.info("resuming ModelScope download: %s -> %s", MODEL_REPO, root)
-        from modelscope.hub.snapshot_download import snapshot_download as ms_download
-
-        ms_download(MODEL_REPO, local_dir=root)
-        return
-
+def _download_huggingface(root: str) -> None:
     logger.info("resuming Hugging Face download: %s -> %s", MODEL_REPO, root)
     from huggingface_hub import snapshot_download
 
@@ -163,15 +180,49 @@ def download_model(root: str) -> None:
         snapshot_download(**kwargs)
 
 
+def _download_modelscope(root: str) -> None:
+    logger.info("resuming ModelScope download: %s -> %s", MODEL_REPO, root)
+    from modelscope.hub.snapshot_download import snapshot_download as ms_download
+
+    ms_download(MODEL_REPO, local_dir=root)
+
+
+def download_model(root: str) -> None:
+    os.makedirs(root, exist_ok=True)
+    sources = ["modelscope", "huggingface"] if MODEL_SOURCE == "modelscope" else ["huggingface", "modelscope"]
+    errors = []
+    for source in sources:
+        try:
+            if source == "huggingface":
+                _download_huggingface(root)
+            else:
+                _download_modelscope(root)
+        except Exception as exc:
+            logger.warning("%s download failed: %s", source, exc)
+            errors.append(f"{source}: {exc}")
+            continue
+        missing = _missing_required(root)
+        if not missing and not _has_incomplete(root):
+            return
+        logger.warning("%s finished but checkpoint still incomplete: %s", source, ", ".join(missing))
+        errors.append(f"{source}: missing {', '.join(missing)}")
+    raise RuntimeError(
+        "model download finished but checkpoint is still incomplete: "
+        f"{root}; {'; '.join(errors)}"
+    )
+
+
 def ensure_model() -> None:
     os.makedirs(root := CKPT_DIR, exist_ok=True)
     if is_model_complete(root):
         logger.info("Wan2.2-TI2V-5B already complete at %s", root)
         return
-    logger.info("Wan2.2-TI2V-5B missing or incomplete, start / resume download")
+    missing = _missing_required(root)
+    logger.info(
+        "Wan2.2-TI2V-5B missing or incomplete, start / resume download%s",
+        f" (missing: {', '.join(missing)})" if missing else "",
+    )
     download_model(root)
-    if not _has_required_files(root) or _has_incomplete(root):
-        raise RuntimeError(f"model download finished but checkpoint is still incomplete: {root}")
     logger.info("Wan2.2-TI2V-5B download finished")
 
 
