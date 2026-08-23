@@ -3,12 +3,15 @@ name: Build
 on:
   push:
     tags:
-      - 'v*'  # 匹配所有以 v 开头的 tag，如 v1.0.0
+      - 'v*'
+  workflow_dispatch:
 
 jobs:
   build:
     name: Build And Push Docker Image
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
     - name: 准备代码
@@ -40,7 +43,10 @@ jobs:
       with:
         context: .
         file: ./docker/Dockerfile
+        platforms: linux/amd64
         push: true
+        provenance: false
+        sbom: false
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha

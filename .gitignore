@@ -5,3 +5,5 @@ tmp_examples*
 new_checkpoint*
 batch_test*
 nohup*
+output/
+Wan2.2-TI2V-5B/
