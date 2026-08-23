@@ -14,7 +14,7 @@ services:
       - DOWNLOAD_URL=${DOWNLOAD_URL:-http://127.0.0.1/}
       - MODEL_SOURCE=${MODEL_SOURCE:-huggingface}
       - HF_TOKEN=${HF_TOKEN:-}
-      - HF_ENDPOINT=${HF_ENDPOINT:-}
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}
       - MODELSCOPE_TOKEN=${MODELSCOPE_TOKEN:-}
     volumes:
       - ./Wan2.2-TI2V-5B:/app/Wan2.2-TI2V-5B

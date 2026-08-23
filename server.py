@@ -31,6 +31,22 @@ DEFAULT_SIZE = "1280*704"
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8000"))
 
+
+def _sanitize_env() -> None:
+    """Blank env values (e.g. HF_ENDPOINT=) break huggingface_hub URL joining."""
+    for key in (
+        "HF_ENDPOINT",
+        "HF_TOKEN",
+        "HUGGING_FACE_HUB_TOKEN",
+        "MODELSCOPE_TOKEN",
+    ):
+        value = os.environ.get(key)
+        if value is not None and not value.strip():
+            os.environ.pop(key, None)
+
+
+_sanitize_env()
+
 REQUIRED_FILES = (
     "config.json",
     "models_t5_umt5-xxl-enc-bf16.pth",
