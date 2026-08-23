@@ -3,6 +3,9 @@ name: wan
 services:
   wan:
     image: gogoshine/wan:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: wan
     ports:
       - "8000:8000"
