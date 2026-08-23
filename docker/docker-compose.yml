@@ -1,9 +1,6 @@
 services:
   wan:
-    image: ${DOCKERHUB_USERNAME:-wan}/wan:latest
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
+    image: gogoshine/wan:latest
     ports:
       - "8000:8000"
     environment:
@@ -13,8 +10,8 @@ services:
       HF_ENDPOINT: ${HF_ENDPOINT:-}
       MODELSCOPE_TOKEN: ${MODELSCOPE_TOKEN:-}
     volumes:
-      - ../Wan2.2-TI2V-5B:/app/Wan2.2-TI2V-5B
-      - ../output:/app/output
+      - ./Wan2.2-TI2V-5B:/app/Wan2.2-TI2V-5B
+      - ./output:/app/output
     gpus: all
     shm_size: 16gb
     restart: unless-stopped
