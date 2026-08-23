@@ -30,8 +30,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt /tmp/requirements.txt
 COPY docker/requirements.txt /tmp/docker-requirements.txt
 
-# flash_attn is optional: Wan attention already falls back to SDPA.
-RUN grep -vE '^flash_attn($|[=<>])' /tmp/requirements.txt > /tmp/requirements.docker.txt \
+# flash_attn needs nvcc (devel image). Strip CRLF from Windows checkouts, then skip it;
+# Wan attention already falls back to SDPA.
+RUN sed -i 's/\r$//' /tmp/requirements.txt /tmp/docker-requirements.txt \
+    && grep -vE '^flash_attn' /tmp/requirements.txt > /tmp/requirements.docker.txt \
     && pip install --no-cache-dir -r /tmp/requirements.docker.txt \
     && pip install --no-cache-dir -r /tmp/docker-requirements.txt \
     && rm -rf /tmp/requirements.txt /tmp/requirements.docker.txt /tmp/docker-requirements.txt /root/.cache/pip
