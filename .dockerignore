@@ -8,6 +8,8 @@
 **/*.pyo
 **/.DS_Store
 output
+docker/output
+docker/models
 Wan2.2-TI2V-5B
 *.mp4
 *.safetensors
@@ -25,5 +27,9 @@ LICENSE.txt
 tests
 Makefile
 pyproject.toml
+requirements.txt
 requirements_s2v.txt
 requirements_animate.txt
+wan
+generate.py
+INSTALL.md

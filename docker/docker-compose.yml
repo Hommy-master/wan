@@ -12,12 +12,13 @@ services:
     environment:
       # 用于将容器内部的文件路径转成URL，本质是将/app/替换成DOWNLOAD_URL得到下载路径
       - DOWNLOAD_URL=${DOWNLOAD_URL:-http://127.0.0.1/}
-      - MODEL_SOURCE=${MODEL_SOURCE:-huggingface}
       - HF_TOKEN=${HF_TOKEN:-}
       - HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}
-      - MODELSCOPE_TOKEN=${MODELSCOPE_TOKEN:-}
+      - COMFY_POLL_TIMEOUT=${COMFY_POLL_TIMEOUT:-7200}
     volumes:
-      - ./Wan2.2-TI2V-5B:/app/Wan2.2-TI2V-5B
+      # ComfyUI 模型目录（断点续传）
+      - ./models:/app/ComfyUI/models
+      # API 输出视频
       - ./output:/app/output
     gpus: all
     shm_size: 16gb

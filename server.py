@@ -1,375 +1,305 @@
-# Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
-"""Wan2.2-TI2V-5B REST API. Downloads the checkpoint on startup (resumable), then serves t2v / i2v."""
+# Copyright 2024-2025. Wan2.2 ComfyUI REST API gateway.
+"""FastAPI gateway over ComfyUI for Wan2.2-TI2V-5B: t2v / i2v / flf2v."""
+from __future__ import annotations
+
+import copy
+import json
 import logging
 import os
+import shutil
 import sys
 import threading
+import time
 import uuid
-import warnings
 from datetime import datetime
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 from urllib.parse import urlparse
 
-warnings.filterwarnings("ignore")
-
-import torch
+import httpx
 from fastapi import FastAPI, HTTPException
-from PIL import Image
 from pydantic import BaseModel, Field, field_validator
 
-from wan.configs import MAX_AREA_CONFIGS, SIZE_CONFIGS, SUPPORTED_SIZES, WAN_CONFIGS
-from wan.utils.utils import save_video
-
 APP_ROOT = os.environ.get("APP_ROOT", "/app")
-CKPT_DIR = os.environ.get("CKPT_DIR", os.path.join(APP_ROOT, "Wan2.2-TI2V-5B"))
-OUTPUT_DIR = os.environ.get("OUTPUT_DIR", os.path.join(APP_ROOT, "output"))
 DOWNLOAD_URL = os.environ.get("DOWNLOAD_URL", "http://127.0.0.1/")
-MODEL_REPO = os.environ.get("MODEL_REPO", "Wan-AI/Wan2.2-TI2V-5B")
-MODEL_SOURCE = os.environ.get("MODEL_SOURCE", "huggingface").strip().lower()
-TASK = "ti2v-5B"
-DEFAULT_SIZE = "1280*704"
+OUTPUT_DIR = os.environ.get("OUTPUT_DIR", os.path.join(APP_ROOT, "output"))
+WORKFLOW_DIR = os.environ.get(
+    "WORKFLOW_DIR", os.path.join(APP_ROOT, "docker", "workflows")
+)
+COMFY_HOST = os.environ.get("COMFY_HOST", "127.0.0.1")
+COMFY_PORT = int(os.environ.get("COMFY_PORT", "8188"))
+COMFY_BASE = os.environ.get("COMFY_BASE", f"http://{COMFY_HOST}:{COMFY_PORT}")
+COMFY_OUTPUT_DIR = os.environ.get(
+    "COMFY_OUTPUT_DIR", os.path.join(APP_ROOT, "ComfyUI", "output")
+)
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8000"))
-
-
-def _sanitize_env() -> None:
-    """Blank env values (e.g. HF_ENDPOINT=) break huggingface_hub URL joining."""
-    for key in (
-        "HF_ENDPOINT",
-        "HF_TOKEN",
-        "HUGGING_FACE_HUB_TOKEN",
-        "MODELSCOPE_TOKEN",
-    ):
-        value = os.environ.get(key)
-        if value is not None and not value.strip():
-            os.environ.pop(key, None)
-
-
-_sanitize_env()
-
-REQUIRED_FILES = {
-    "config.json": 1,
-    "models_t5_umt5-xxl-enc-bf16.pth": 5 * 1024 ** 3,
-    "Wan2.2_VAE.pth": 100 * 1024 ** 2,
-    "google/umt5-xxl/tokenizer_config.json": 1,
-}
-SAFETENSORS_MIN_BYTES = 100 * 1024 ** 2
-CACHE_DIR_NAMES = {".cache", ".hf_home", ".modelscope", ".git"}
+DEFAULT_SIZE = "1280*704"
+DEFAULT_NEGATIVE = (
+    "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，"
+    "整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，"
+    "画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，"
+    "静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+)
+SUPPORTED_SIZES = ("1280*704", "704*1280")
+POLL_INTERVAL = float(os.environ.get("COMFY_POLL_INTERVAL", "1.5"))
+POLL_TIMEOUT = float(os.environ.get("COMFY_POLL_TIMEOUT", "7200"))
 
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s: %(message)s",
     handlers=[logging.StreamHandler(stream=sys.stdout)],
 )
-logger = logging.getLogger("wan.api")
-
-_pipeline = None
+logger = logging.getLogger("wan.comfy.api")
 _gen_lock = threading.Lock()
-
-
-def _bool_env(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in ("1", "true", "yes", "y", "on")
+_client_id = str(uuid.uuid4())
 
 
 def path_to_url(abs_path: str) -> str:
-    """Replace the container prefix /app/ with DOWNLOAD_URL."""
     download_url = DOWNLOAD_URL if DOWNLOAD_URL.endswith("/") else DOWNLOAD_URL + "/"
     normalized = abs_path.replace("\\", "/")
     if normalized.startswith("/app/"):
-        return download_url + normalized[len("/app/"):]
+        return download_url + normalized[len("/app/") :]
     app_root = os.path.abspath(APP_ROOT).replace("\\", "/")
     if not app_root.endswith("/"):
         app_root += "/"
     if normalized.startswith(app_root):
-        return download_url + normalized[len(app_root):]
+        return download_url + normalized[len(app_root) :]
     return download_url + os.path.basename(normalized)
 
 
-def _walk_checkpoint(root: str):
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [name for name in dirnames if name not in CACHE_DIR_NAMES]
-        yield dirpath, filenames
-
-
-def _has_incomplete(root: str) -> bool:
-    for _, filenames in _walk_checkpoint(root):
-        for name in filenames:
-            if name.endswith(".incomplete") or name.endswith(".lock"):
-                return True
-    return False
-
-
-def _missing_required(root: str) -> list[str]:
-    missing = []
-    for rel, min_size in REQUIRED_FILES.items():
-        path = os.path.join(root, rel)
-        if not os.path.isfile(path):
-            missing.append(rel)
-            continue
-        size = os.path.getsize(path)
-        if size < min_size:
-            missing.append(f"{rel} ({size} bytes)")
-    has_weights = False
-    for dirpath, filenames in _walk_checkpoint(root):
-        for name in filenames:
-            if name.endswith(".safetensors") and os.path.getsize(os.path.join(dirpath, name)) >= SAFETENSORS_MIN_BYTES:
-                has_weights = True
-                break
-        if has_weights:
-            break
-    if not has_weights:
-        missing.append("*.safetensors")
-    return missing
-
-
-def _has_required_files(root: str) -> bool:
-    return not _missing_required(root)
-
-
-def _hf_sizes_match(root: str, repo_id: str) -> bool:
-    from huggingface_hub import HfApi
-
-    endpoint = os.environ.get("HF_ENDPOINT") or None
-    api = HfApi(endpoint=endpoint, token=os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"))
-    for item in api.list_repo_tree(repo_id, recursive=True):
-        size = getattr(item, "size", None)
-        path = getattr(item, "path", None)
-        if not path or size is None:
-            continue
-        if path.split("/", 1)[0] in CACHE_DIR_NAMES:
-            continue
-        local = os.path.join(root, path)
-        if not os.path.isfile(local) or os.path.getsize(local) != size:
-            logger.info("checkpoint incomplete: %s", path)
-            return False
-    return True
-
-
-def is_model_complete(root: str) -> bool:
-    if not os.path.isdir(root):
-        return False
-    if _has_incomplete(root):
-        return False
-    if not _has_required_files(root):
-        return False
-    if MODEL_SOURCE == "huggingface":
-        try:
-            return _hf_sizes_match(root, MODEL_REPO)
-        except Exception as exc:
-            logger.warning("skip remote size check (%s), use local files", exc)
-            return True
-    return True
-
-
-def _download_huggingface(root: str) -> None:
-    logger.info("resuming Hugging Face download: %s -> %s", MODEL_REPO, root)
-    from huggingface_hub import snapshot_download
-
-    kwargs = dict(
-        repo_id=MODEL_REPO,
-        local_dir=root,
-        token=os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"),
-        max_workers=int(os.environ.get("HF_DOWNLOAD_WORKERS", "8")),
-    )
-    try:
-        snapshot_download(resume_download=True, **kwargs)
-    except TypeError:
-        snapshot_download(**kwargs)
-
-
-def _download_modelscope(root: str) -> None:
-    logger.info("resuming ModelScope download: %s -> %s", MODEL_REPO, root)
-    from modelscope.hub.snapshot_download import snapshot_download as ms_download
-
-    ms_download(MODEL_REPO, local_dir=root)
-
-
-def download_model(root: str) -> None:
-    os.makedirs(root, exist_ok=True)
-    sources = ["modelscope", "huggingface"] if MODEL_SOURCE == "modelscope" else ["huggingface", "modelscope"]
-    errors = []
-    for source in sources:
-        try:
-            if source == "huggingface":
-                _download_huggingface(root)
-            else:
-                _download_modelscope(root)
-        except Exception as exc:
-            logger.warning("%s download failed: %s", source, exc)
-            errors.append(f"{source}: {exc}")
-            continue
-        missing = _missing_required(root)
-        if not missing and not _has_incomplete(root):
-            return
-        logger.warning("%s finished but checkpoint still incomplete: %s", source, ", ".join(missing))
-        errors.append(f"{source}: missing {', '.join(missing)}")
-    raise RuntimeError(
-        "model download finished but checkpoint is still incomplete: "
-        f"{root}; {'; '.join(errors)}"
-    )
-
-
-def ensure_model() -> None:
-    os.makedirs(root := CKPT_DIR, exist_ok=True)
-    if is_model_complete(root):
-        logger.info("Wan2.2-TI2V-5B already complete at %s", root)
-        return
-    missing = _missing_required(root)
-    logger.info(
-        "Wan2.2-TI2V-5B missing or incomplete, start / resume download%s",
-        f" (missing: {', '.join(missing)})" if missing else "",
-    )
-    download_model(root)
-    logger.info("Wan2.2-TI2V-5B download finished")
-
-
-def load_pipeline():
-    global _pipeline
-    import wan
-
-    cfg = WAN_CONFIGS[TASK]
-    logger.info("loading WanTI2V from %s", CKPT_DIR)
-    _pipeline = wan.WanTI2V(
-        config=cfg,
-        checkpoint_dir=CKPT_DIR,
-        device_id=0,
-        rank=0,
-        t5_fsdp=False,
-        dit_fsdp=False,
-        use_sp=False,
-        t5_cpu=_bool_env("T5_CPU", True),
-        convert_model_dtype=_bool_env("CONVERT_MODEL_DTYPE", True),
-    )
-    logger.info("WanTI2V ready")
-
-
-def _validate_size(size: str) -> str:
-    supported = SUPPORTED_SIZES[TASK]
-    if size not in supported:
+def parse_size(size: str) -> tuple[int, int]:
+    if size not in SUPPORTED_SIZES:
         raise HTTPException(
             status_code=400,
-            detail=f"unsupported size {size}, supported: {', '.join(supported)}",
+            detail=f"unsupported size {size}, supported: {', '.join(SUPPORTED_SIZES)}",
         )
-    return size
+    width_s, height_s = size.split("*")
+    return int(width_s), int(height_s)
 
 
-def _validate_frame_num(frame_num: int) -> int:
+def validate_frame_num(frame_num: int) -> int:
     if frame_num < 1 or (frame_num - 1) % 4 != 0:
         raise HTTPException(status_code=400, detail="frame_num must be 4n+1")
     return frame_num
 
 
-def download_image(image_url: str) -> Image.Image:
-    parsed = urlparse(image_url)
+def validate_http_url(value: str, field: str) -> str:
+    parsed = urlparse(value)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise HTTPException(status_code=400, detail="image_url must be an http or https URL")
+        raise HTTPException(status_code=400, detail=f"{field} must be an http or https URL")
+    return value
 
-    import httpx
 
+def load_workflow(name: str) -> dict:
+    path = Path(WORKFLOW_DIR) / name
+    if not path.is_file():
+        raise HTTPException(status_code=500, detail=f"workflow not found: {path}")
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def wait_comfy_ready(timeout: float = 600.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                r = client.get(f"{COMFY_BASE}/system_stats")
+                if r.status_code == 200:
+                    logger.info("ComfyUI is ready at %s", COMFY_BASE)
+                    return
+        except Exception:
+            pass
+        time.sleep(2)
+    raise RuntimeError(f"ComfyUI not ready within {timeout}s: {COMFY_BASE}")
+
+
+def download_bytes(url: str) -> bytes:
+    validate_http_url(url, "image_url")
     max_bytes = int(os.environ.get("MAX_IMAGE_BYTES", str(30 * 1024 * 1024)))
     try:
         with httpx.Client(timeout=60.0, follow_redirects=True) as client:
-            with client.stream("GET", image_url) as response:
+            with client.stream("GET", url) as response:
                 response.raise_for_status()
-                chunks = []
+                chunks: list[bytes] = []
                 total = 0
                 for chunk in response.iter_bytes():
                     total += len(chunk)
                     if total > max_bytes:
-                        raise HTTPException(status_code=400, detail="image is larger than the allowed size")
+                        raise HTTPException(status_code=400, detail="image is larger than allowed")
                     chunks.append(chunk)
-        from io import BytesIO
-
-        image = Image.open(BytesIO(b"".join(chunks))).convert("RGB")
+        return b"".join(chunks)
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"failed to download image: {exc}") from exc
-    return image
 
 
-def generate_video(prompt: str, image: Optional[Image.Image], req) -> dict:
-    if _pipeline is None:
-        raise HTTPException(status_code=503, detail="model is not ready")
+def upload_image(data: bytes, filename: str) -> str:
+    files = {"image": (filename, data, "application/octet-stream")}
+    form = {"overwrite": "true"}
+    with httpx.Client(timeout=120.0) as client:
+        r = client.post(f"{COMFY_BASE}/upload/image", files=files, data=form)
+        if r.status_code >= 400:
+            raise HTTPException(status_code=502, detail=f"ComfyUI upload failed: {r.text}")
+        payload = r.json()
+    name = payload.get("name")
+    if not name:
+        raise HTTPException(status_code=502, detail=f"unexpected upload response: {payload}")
+    subfolder = payload.get("subfolder") or ""
+    return f"{subfolder}/{name}" if subfolder else name
 
-    size = _validate_size(req.size)
-    frame_num = _validate_frame_num(req.frame_num)
-    cfg = WAN_CONFIGS[TASK]
-    seed = req.seed if req.seed is not None and req.seed >= 0 else int.from_bytes(os.urandom(8), "little") % (2**31)
+
+def queue_prompt(workflow: dict) -> str:
+    body = {"prompt": workflow, "client_id": _client_id}
+    with httpx.Client(timeout=60.0) as client:
+        r = client.post(f"{COMFY_BASE}/prompt", json=body)
+        if r.status_code >= 400:
+            raise HTTPException(status_code=502, detail=f"ComfyUI prompt failed: {r.text}")
+        payload = r.json()
+    if "error" in payload:
+        raise HTTPException(status_code=502, detail=str(payload["error"]))
+    prompt_id = payload.get("prompt_id")
+    if not prompt_id:
+        raise HTTPException(status_code=502, detail=f"no prompt_id in response: {payload}")
+    return prompt_id
+
+
+def _collect_videos(outputs: dict[str, Any]) -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    for node_out in outputs.values():
+        if not isinstance(node_out, dict):
+            continue
+        for key in ("videos", "gifs", "images"):
+            for item in node_out.get(key) or []:
+                if not isinstance(item, dict):
+                    continue
+                filename = item.get("filename")
+                if not filename:
+                    continue
+                ext = Path(filename).suffix.lower()
+                if key != "images" or ext in {".mp4", ".webm", ".mov", ".mkv", ".gif"}:
+                    found.append((filename, item.get("subfolder") or ""))
+    return found
+
+
+def wait_prompt(prompt_id: str) -> list[tuple[str, str]]:
+    deadline = time.time() + POLL_TIMEOUT
+    with httpx.Client(timeout=30.0) as client:
+        while time.time() < deadline:
+            r = client.get(f"{COMFY_BASE}/history/{prompt_id}")
+            r.raise_for_status()
+            history = r.json()
+            if prompt_id in history:
+                entry = history[prompt_id]
+                status = entry.get("status") or {}
+                if status.get("status_str") == "error" or status.get("completed") is False:
+                    messages = status.get("messages") or entry.get("messages") or []
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"ComfyUI job failed: {messages or status}",
+                    )
+                outputs = entry.get("outputs") or {}
+                videos = _collect_videos(outputs)
+                if videos:
+                    return videos
+                # completed but no video yet — still treat as failure after status complete
+                if status.get("completed"):
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"ComfyUI finished without video output: {outputs}",
+                    )
+            time.sleep(POLL_INTERVAL)
+    raise HTTPException(status_code=504, detail=f"ComfyUI job timed out: {prompt_id}")
+
+
+def publish_video(filename: str, subfolder: str, task_name: str) -> dict:
+    src = Path(COMFY_OUTPUT_DIR) / subfolder / filename if subfolder else Path(COMFY_OUTPUT_DIR) / filename
+    if not src.is_file():
+        # SaveVideo may nest under filename_prefix folders
+        matches = list(Path(COMFY_OUTPUT_DIR).rglob(filename))
+        if not matches:
+            raise HTTPException(status_code=500, detail=f"output video not found: {src}")
+        src = matches[0]
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    task_name = "i2v" if image is not None else "t2v"
-    filename = f"{task_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.mp4"
-    save_path = os.path.abspath(os.path.join(OUTPUT_DIR, filename))
-
-    with _gen_lock:
-        logger.info("generate %s prompt=%s size=%s frames=%s seed=%s", task_name, prompt[:80], size, frame_num, seed)
-        video = _pipeline.generate(
-            prompt,
-            img=image,
-            size=SIZE_CONFIGS[size],
-            max_area=MAX_AREA_CONFIGS[size],
-            frame_num=frame_num,
-            shift=req.sample_shift if req.sample_shift is not None else cfg.sample_shift,
-            sample_solver=req.sample_solver,
-            sampling_steps=req.sample_steps if req.sample_steps is not None else cfg.sample_steps,
-            guide_scale=req.guide_scale if req.guide_scale is not None else cfg.sample_guide_scale,
-            n_prompt=req.negative_prompt or "",
-            seed=seed,
-            offload_model=_bool_env("OFFLOAD_MODEL", True),
-        )
-        save_video(
-            tensor=video[None],
-            save_file=save_path,
-            fps=cfg.sample_fps,
-            nrow=1,
-            normalize=True,
-            value_range=(-1, 1),
-        )
-        del video
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-    if not os.path.isfile(save_path):
-        raise HTTPException(status_code=500, detail="video file was not written")
-
-    container_path = "/app/output/" + filename
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_name = f"{task_name}_{stamp}_{uuid.uuid4().hex[:8]}{src.suffix or '.mp4'}"
+    dest = Path(OUTPUT_DIR) / out_name
+    shutil.copy2(src, dest)
+    container_path = f"/app/output/{out_name}"
     return {
         "task": task_name,
         "video_path": container_path,
         "video_url": path_to_url(container_path),
-        "seed": seed,
+        "seed": None,
     }
 
 
-class GenerateRequest(BaseModel):
+def apply_common(
+    workflow: dict,
+    *,
+    prompt: str,
+    negative_prompt: str,
+    width: int,
+    height: int,
+    frame_num: int,
+    seed: int,
+    sample_steps: int,
+    guide_scale: float,
+    sample_shift: float,
+    filename_prefix: str,
+) -> dict:
+    wf = copy.deepcopy(workflow)
+    wf["6"]["inputs"]["text"] = prompt
+    wf["7"]["inputs"]["text"] = negative_prompt or DEFAULT_NEGATIVE
+    wf["3"]["inputs"]["seed"] = seed
+    wf["3"]["inputs"]["steps"] = sample_steps
+    wf["3"]["inputs"]["cfg"] = guide_scale
+    wf["48"]["inputs"]["shift"] = sample_shift
+    wf["55"]["inputs"]["width"] = width
+    wf["55"]["inputs"]["height"] = height
+    wf["55"]["inputs"]["length"] = frame_num
+    wf["58"]["inputs"]["filename_prefix"] = filename_prefix
+    return wf
+
+
+def run_job(task_name: str, workflow: dict, seed: int) -> dict:
+    with _gen_lock:
+        logger.info("queue %s seed=%s", task_name, seed)
+        prompt_id = queue_prompt(workflow)
+        logger.info("%s prompt_id=%s", task_name, prompt_id)
+        videos = wait_prompt(prompt_id)
+        filename, subfolder = videos[0]
+        result = publish_video(filename, subfolder, task_name)
+        result["seed"] = seed
+        logger.info("%s done -> %s", task_name, result["video_path"])
+        return result
+
+
+def resolve_seed(seed: int) -> int:
+    if seed is not None and seed >= 0:
+        return seed
+    return int.from_bytes(os.urandom(8), "little") % (2**31)
+
+
+class GenerateBase(BaseModel):
     prompt: str = Field(..., description="Text prompt")
     negative_prompt: Optional[str] = Field(default="", description="Negative prompt")
-    size: str = Field(default=DEFAULT_SIZE, description="Video size, e.g. 1280*704 or 704*1280")
-    frame_num: int = Field(default=121, description="Number of frames, must be 4n+1")
+    size: str = Field(default=DEFAULT_SIZE, description="1280*704 or 704*1280")
+    frame_num: int = Field(default=121, description="Frame count, must be 4n+1")
     seed: int = Field(default=-1, description="Random seed, -1 for random")
-    sample_steps: Optional[int] = Field(default=None, description="Diffusion sampling steps")
-    sample_shift: Optional[float] = Field(default=None, description="Flow-matching shift")
-    guide_scale: Optional[float] = Field(default=None, description="CFG scale")
-    sample_solver: str = Field(default="unipc", description="unipc or dpm++")
-
-    @field_validator("sample_solver")
-    @classmethod
-    def _solver(cls, value: str) -> str:
-        if value not in ("unipc", "dpm++"):
-            raise ValueError("sample_solver must be unipc or dpm++")
-        return value
+    sample_steps: int = Field(default=20, description="Sampling steps")
+    sample_shift: float = Field(default=8.0, description="ModelSamplingSD3 shift")
+    guide_scale: float = Field(default=5.0, description="CFG scale")
 
 
-class T2VRequest(GenerateRequest):
+class T2VRequest(GenerateBase):
     pass
 
 
-class I2VRequest(GenerateRequest):
-    image_url: str = Field(..., description="Source image URL, http or https only")
+class I2VRequest(GenerateBase):
+    image_url: str = Field(..., description="Source image URL (http/https)")
 
     @field_validator("image_url")
     @classmethod
@@ -380,10 +310,23 @@ class I2VRequest(GenerateRequest):
         return value
 
 
+class FLF2VRequest(GenerateBase):
+    start_image_url: str = Field(..., description="First frame image URL (http/https)")
+    end_image_url: str = Field(..., description="Last frame image URL (http/https)")
+
+    @field_validator("start_image_url", "end_image_url")
+    @classmethod
+    def _urls(cls, value: str) -> str:
+        parsed = urlparse(value)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("image URL must be http or https")
+        return value
+
+
 app = FastAPI(
-    title="Wan2.2 TI2V-5B API",
-    description="Text-to-video and image-to-video REST API powered by Wan2.2-TI2V-5B",
-    version="1.0.0",
+    title="Wan2.2 TI2V-5B ComfyUI API",
+    description="REST API for text-to-video, image-to-video, and first-last-frame-to-video",
+    version="2.0.0",
 )
 
 
@@ -391,24 +334,52 @@ app = FastAPI(
 def root():
     return {
         "model": "Wan2.2-TI2V-5B",
-        "ready": _pipeline is not None,
+        "engine": "ComfyUI",
         "endpoints": {
             "GET /health": "service health",
             "POST /t2v": "text to video",
             "POST /i2v": "image URL to video",
+            "POST /flf2v": "first/last frame URLs to video",
         },
     }
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": "Wan2.2-TI2V-5B", "ready": _pipeline is not None}
+    ready = False
+    try:
+        with httpx.Client(timeout=3.0) as client:
+            ready = client.get(f"{COMFY_BASE}/system_stats").status_code == 200
+    except Exception:
+        ready = False
+    return {
+        "status": "ok" if ready else "starting",
+        "model": "Wan2.2-TI2V-5B",
+        "engine": "ComfyUI",
+        "ready": ready,
+    }
 
 
 @app.post("/t2v")
 def t2v(req: T2VRequest):
     try:
-        return generate_video(req.prompt, None, req)
+        width, height = parse_size(req.size)
+        frame_num = validate_frame_num(req.frame_num)
+        seed = resolve_seed(req.seed)
+        workflow = apply_common(
+            load_workflow("t2v_api.json"),
+            prompt=req.prompt,
+            negative_prompt=req.negative_prompt or "",
+            width=width,
+            height=height,
+            frame_num=frame_num,
+            seed=seed,
+            sample_steps=req.sample_steps,
+            guide_scale=req.guide_scale,
+            sample_shift=req.sample_shift,
+            filename_prefix=f"api/t2v_{uuid.uuid4().hex[:8]}",
+        )
+        return run_job("t2v", workflow, seed)
     except HTTPException:
         raise
     except Exception as exc:
@@ -419,8 +390,25 @@ def t2v(req: T2VRequest):
 @app.post("/i2v")
 def i2v(req: I2VRequest):
     try:
-        image = download_image(req.image_url)
-        return generate_video(req.prompt, image, req)
+        width, height = parse_size(req.size)
+        frame_num = validate_frame_num(req.frame_num)
+        seed = resolve_seed(req.seed)
+        image_name = upload_image(download_bytes(req.image_url), f"i2v_{uuid.uuid4().hex[:8]}.png")
+        workflow = apply_common(
+            load_workflow("i2v_api.json"),
+            prompt=req.prompt,
+            negative_prompt=req.negative_prompt or "",
+            width=width,
+            height=height,
+            frame_num=frame_num,
+            seed=seed,
+            sample_steps=req.sample_steps,
+            guide_scale=req.guide_scale,
+            sample_shift=req.sample_shift,
+            filename_prefix=f"api/i2v_{uuid.uuid4().hex[:8]}",
+        )
+        workflow["56"]["inputs"]["image"] = image_name
+        return run_job("i2v", workflow, seed)
     except HTTPException:
         raise
     except Exception as exc:
@@ -428,13 +416,44 @@ def i2v(req: I2VRequest):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@app.post("/flf2v")
+def flf2v(req: FLF2VRequest):
+    try:
+        width, height = parse_size(req.size)
+        frame_num = validate_frame_num(req.frame_num)
+        seed = resolve_seed(req.seed)
+        start_name = upload_image(
+            download_bytes(req.start_image_url), f"flf_start_{uuid.uuid4().hex[:8]}.png"
+        )
+        end_name = upload_image(
+            download_bytes(req.end_image_url), f"flf_end_{uuid.uuid4().hex[:8]}.png"
+        )
+        workflow = apply_common(
+            load_workflow("flf2v_api.json"),
+            prompt=req.prompt,
+            negative_prompt=req.negative_prompt or "",
+            width=width,
+            height=height,
+            frame_num=frame_num,
+            seed=seed,
+            sample_steps=req.sample_steps,
+            guide_scale=req.guide_scale,
+            sample_shift=req.sample_shift,
+            filename_prefix=f"api/flf2v_{uuid.uuid4().hex[:8]}",
+        )
+        workflow["56"]["inputs"]["image"] = start_name
+        workflow["60"]["inputs"]["image"] = end_name
+        return run_job("flf2v", workflow, seed)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("flf2v failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 def main() -> None:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    os.makedirs(CKPT_DIR, exist_ok=True)
-    if not torch.cuda.is_available():
-        logger.warning("CUDA is not available; generation will fail on CPU")
-    ensure_model()
-    load_pipeline()
+    wait_comfy_ready()
     import uvicorn
 
     logger.info("API listening on %s:%s  DOWNLOAD_URL=%s", HOST, PORT, DOWNLOAD_URL)
