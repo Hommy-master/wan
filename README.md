@@ -1,507 +1,212 @@
-# Wan2.2
+# Wan2.2 TI2V-5B Docker 部署与 API 说明
 
-<p align="center">
-    <img src="assets/logo.png" width="400"/>
-<p>
+本项目基于 [Wan2.2](https://github.com/Wan-Video/Wan2.2) 的 **Wan2.2-TI2V-5B** 模型，提供 Docker 容器化部署，以及文生视频（t2v）、图生视频（i2v）的 RESTful API。
 
-<p align="center">
-    💜 <a href="https://wan.video"><b>Wan</b></a> &nbsp&nbsp ｜ &nbsp&nbsp 🖥️ <a href="https://github.com/Wan-Video/Wan2.2">GitHub</a> &nbsp&nbsp  | &nbsp&nbsp🤗 <a href="https://huggingface.co/Wan-AI/">Hugging Face</a>&nbsp&nbsp | &nbsp&nbsp🤖 <a href="https://modelscope.cn/organization/Wan-AI">ModelScope</a>&nbsp&nbsp | &nbsp&nbsp 📑 <a href="https://arxiv.org/abs/2503.20314">Paper</a> &nbsp&nbsp | &nbsp&nbsp 📑 <a href="https://wan.video/welcome?spm=a2ty_o02.30011076.0.0.6c9ee41eCcluqg">Blog</a> &nbsp&nbsp |  &nbsp&nbsp 💬  <a href="https://discord.gg/AKNgpMK4Yj">Discord</a>&nbsp&nbsp
-    <br>
-    📕 <a href="https://alidocs.dingtalk.com/i/nodes/jb9Y4gmKWrx9eo4dCql9LlbYJGXn6lpz">使用指南(中文)</a>&nbsp&nbsp | &nbsp&nbsp 📘 <a href="https://alidocs.dingtalk.com/i/nodes/EpGBa2Lm8aZxe5myC99MelA2WgN7R35y">User Guide(English)</a>&nbsp&nbsp | &nbsp&nbsp💬 <a href="https://gw.alicdn.com/imgextra/i2/O1CN01tqjWFi1ByuyehkTSB_!!6000000000015-0-tps-611-1279.jpg">WeChat(微信)</a>&nbsp&nbsp
-<br>
+容器启动后会自动下载（支持断点续传）并加载模型，服务监听 `8000` 端口。
 
------
+## 环境要求
 
-[**Wan: Open and Advanced Large-Scale Video Generative Models**](https://arxiv.org/abs/2503.20314) <be>
+- Docker / Docker Compose
+- NVIDIA GPU（建议显存 ≥ 24GB，如 RTX 4090）
+- NVIDIA Container Toolkit（`--gpus` 可用）
+- 宿主机内存建议 ≥ 64GB（加载 T5 + DiT 时占用较大）
 
+## 快速启动
 
-We are excited to introduce **Wan2.2**, a major upgrade to our foundational video models. With **Wan2.2**, we have focused on incorporating the following innovations:
-
-- 👍 **Effective MoE Architecture**: Wan2.2 introduces a Mixture-of-Experts (MoE) architecture into video diffusion models. By separating the denoising process cross timesteps with specialized powerful expert models, this enlarges the overall model capacity while maintaining the same computational cost.
-
-- 👍 **Cinematic-level Aesthetics**: Wan2.2 incorporates meticulously curated aesthetic data, complete with detailed labels for lighting, composition, contrast, color tone, and more. This allows for more precise and controllable cinematic style generation, facilitating the creation of videos with customizable aesthetic preferences.
-
-- 👍 **Complex Motion Generation**: Compared to Wan2.1, Wan2.2 is trained on a significantly larger data, with +65.6% more images and +83.2% more videos. This expansion notably enhances the model's generalization across multiple dimensions such as motions,  semantics, and aesthetics, achieving TOP performance among all open-sourced and closed-sourced models. 
-
-- 👍 **Efficient High-Definition Hybrid TI2V**:  Wan2.2 open-sources a 5B model built with our advanced Wan2.2-VAE that achieves a compression ratio of **16×16×4**. This model supports both text-to-video and image-to-video generation at 720P resolution with 24fps and can also run on consumer-grade graphics cards like 4090. It is one of the fastest **720P@24fps** models currently available, capable of serving both the industrial and academic sectors simultaneously.
-
-
-## Video Demos
-
-<div align="center">
-  <video src="https://github.com/user-attachments/assets/b63bfa58-d5d7-4de6-a1a2-98970b06d9a7" width="70%" poster=""> </video>
-</div>
-
-## 🔥 Latest News!!
-* Nov 13, 2025: 👋 Wan2.2-Animate-14B has been integrated into Diffusers ([PR](https://github.com/huggingface/diffusers/pull/12526),[Weights](https://huggingface.co/Wan-AI/Wan2.2-Animate-14B-Diffusers)). Thanks to all community contributors. Enjoy!
-
-* Sep 19, 2025: 💃 We introduct **[Wan2.2-Animate-14B](https://humanaigc.github.io/wan-animate)**, an unified model for character animation and replacement with holistic movement and expression replication. We released the [model weights](#model-download) and [inference code](#run-wan-animate). And you can try it on [wan.video](https://wan.video/), [ModelScope Studio](https://www.modelscope.cn/studios/Wan-AI/Wan2.2-Animate) or [HuggingFace Space](https://huggingface.co/spaces/Wan-AI/Wan2.2-Animate)!
-* Aug 26, 2025: 🎵 We introduce **[Wan2.2-S2V-14B](https://humanaigc.github.io/wan-s2v-webpage)**, an audio-driven cinematic video generation model, including [inference code](#run-speech-to-video-generation), [model weights](#model-download), and [technical report](https://humanaigc.github.io/wan-s2v-webpage/content/wan-s2v.pdf)! Now you can try it on [wan.video](https://wan.video/),  [ModelScope Gradio](https://www.modelscope.cn/studios/Wan-AI/Wan2.2-S2V) or [HuggingFace Gradio](https://huggingface.co/spaces/Wan-AI/Wan2.2-S2V)!
-* Jul 28, 2025: 👋 We have open a [HF space](https://huggingface.co/spaces/Wan-AI/Wan-2.2-5B) using the TI2V-5B model. Enjoy!
-* Jul 28, 2025: 👋 Wan2.2 has been integrated into ComfyUI ([CN](https://docs.comfy.org/zh-CN/tutorials/video/wan/wan2_2) | [EN](https://docs.comfy.org/tutorials/video/wan/wan2_2)). Enjoy!
-* Jul 28, 2025: 👋 Wan2.2's T2V, I2V and TI2V have been integrated into Diffusers ([T2V-A14B](https://huggingface.co/Wan-AI/Wan2.2-T2V-A14B-Diffusers) | [I2V-A14B](https://huggingface.co/Wan-AI/Wan2.2-I2V-A14B-Diffusers) | [TI2V-5B](https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B-Diffusers)). Feel free to give it a try!
-* Jul 28, 2025: 👋 We've released the inference code and model weights of **Wan2.2**.
-* Sep 5, 2025: 👋 We add text-to-speech synthesis support with [CosyVoice](https://github.com/FunAudioLLM/CosyVoice) for Speech-to-Video generation task.
-
-
-## Community Works
-If your research or project builds upon [**Wan2.1**](https://github.com/Wan-Video/Wan2.1) or [**Wan2.2**](https://github.com/Wan-Video/Wan2.2), and you would like more people to see it, please inform us.
-
-- [Prompt Relay](https://github.com/GordonChen19/Prompt-Relay), a plug-and-play, inference-time method for temporal control in video generation. Prompt Relay improves video quality and gives users precise control over what happens at each moment in the video. Visit their [webpage](https://gordonchen19.github.io/Prompt-Relay/) for more details.
-- [Helios](https://github.com/PKU-YuanGroup/Helios), a breakthrough video generation model base on **Wan2.1** that achieves minute-scale, high-quality video synthesis at 19.5 FPS on a single H100 GPU (about 10 FPS on a single Ascend NPU) —without relying on conventional long video anti-drifting strategies or standard video acceleration techniques. Visit their [webpage](https://pku-yuangroup.github.io/Helios-Page/) for more details.
-- [LightX2V](https://github.com/ModelTC/LightX2V), a lightweight and efficient video generation framework that integrates **Wan2.1** and **Wan2.2**, supporting multiple engineering acceleration techniques for fast inference. [LightX2V-HuggingFace](https://huggingface.co/lightx2v), offers a variety of Wan-based step-distillation models, quantized models, and lightweight VAE models.
-- [HuMo](https://github.com/Phantom-video/HuMo) proposed a unified, human-centric framework based on **Wan** to produce high-quality, fine-grained, and controllable human videos from multimodal inputs—including text, images, and audio. Visit their [webpage](https://phantom-video.github.io/HuMo/) for more details.
-- [FastVideo](https://github.com/hao-ai-lab/FastVideo) includes distilled **Wan** models with sparse attention that significanly speed up the inference time. 
-- [Cache-dit](https://github.com/vipshop/cache-dit) offers Fully Cache Acceleration support for **Wan2.2** MoE with DBCache, TaylorSeer and Cache CFG. Visit their [example](https://github.com/vipshop/cache-dit/blob/main/examples/pipeline/run_wan_2.2.py) for more details.
-- [Kijai's ComfyUI WanVideoWrapper](https://github.com/kijai/ComfyUI-WanVideoWrapper) is an alternative implementation of **Wan** models for ComfyUI. Thanks to its Wan-only focus, it's on the frontline of getting cutting edge optimizations and hot research features, which are often hard to integrate into ComfyUI quickly due to its more rigid structure.
-- [DiffSynth-Studio](https://github.com/modelscope/DiffSynth-Studio) provides comprehensive support for **Wan 2.2**, including low-GPU-memory layer-by-layer offload, FP8 quantization, sequence parallelism, LoRA training, full training.
-
-
-## 📑 Todo List
-- Wan2.2 Text-to-Video
-    - [x] Multi-GPU Inference code of the A14B and 14B models
-    - [x] Checkpoints of the A14B and 14B models
-    - [x] ComfyUI integration
-    - [x] Diffusers integration
-- Wan2.2 Image-to-Video
-    - [x] Multi-GPU Inference code of the A14B model
-    - [x] Checkpoints of the A14B model
-    - [x] ComfyUI integration
-    - [x] Diffusers integration
-- Wan2.2 Text-Image-to-Video
-    - [x] Multi-GPU Inference code of the 5B model
-    - [x] Checkpoints of the 5B model
-    - [x] ComfyUI integration
-    - [x] Diffusers integration
-- Wan2.2-S2V Speech-to-Video
-    - [x] Inference code of Wan2.2-S2V
-    - [x] Checkpoints of Wan2.2-S2V-14B
-    - [x] ComfyUI integration
-    - [x] Diffusers integration
-- Wan2.2-Animate Character Animation and Replacement
-    - [x] Inference code of Wan2.2-Animate
-    - [x] Checkpoints of Wan2.2-Animate
-    - [x] ComfyUI integration
-    - [x] Diffusers integration
-
-## Run Wan2.2
-
-#### Installation
-Clone the repo:
-```sh
-git clone https://github.com/Wan-Video/Wan2.2.git
-cd Wan2.2
-```
-
-Install dependencies:
-```sh
-# Ensure torch >= 2.4.0
-# If the installation of `flash_attn` fails, try installing the other packages first and install `flash_attn` last
-pip install -r requirements.txt
-# If you want to use CosyVoice to synthesize speech for Speech-to-Video Generation, please install requirements_s2v.txt additionally
-pip install -r requirements_s2v.txt
-```
-
-
-#### Model Download
-
-| Models              | Download Links                                                                                                                              | Description |
-|--------------------|---------------------------------------------------------------------------------------------------------------------------------------------|-------------|
-| T2V-A14B    | 🤗 [Huggingface](https://huggingface.co/Wan-AI/Wan2.2-T2V-A14B)    🤖 [ModelScope](https://modelscope.cn/models/Wan-AI/Wan2.2-T2V-A14B)    | Text-to-Video MoE model, supports 480P & 720P |
-| I2V-A14B    | 🤗 [Huggingface](https://huggingface.co/Wan-AI/Wan2.2-I2V-A14B)    🤖 [ModelScope](https://modelscope.cn/models/Wan-AI/Wan2.2-I2V-A14B)    | Image-to-Video MoE model, supports 480P & 720P |
-| TI2V-5B     | 🤗 [Huggingface](https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B)     🤖 [ModelScope](https://modelscope.cn/models/Wan-AI/Wan2.2-TI2V-5B)     | High-compression VAE, T2V+I2V, supports 720P |
-| S2V-14B     | 🤗 [Huggingface](https://huggingface.co/Wan-AI/Wan2.2-S2V-14B)     🤖 [ModelScope](https://modelscope.cn/models/Wan-AI/Wan2.2-S2V-14B)     | Speech-to-Video model, supports 480P & 720P |
-| Animate-14B | 🤗 [Huggingface](https://huggingface.co/Wan-AI/Wan2.2-Animate-14B) 🤖 [ModelScope](https://www.modelscope.cn/models/Wan-AI/Wan2.2-Animate-14B)  | Character animation and replacement | |
-
-
-
-> 💡Note: 
-> The TI2V-5B model supports 720P video generation at **24 FPS**.
-
-
-Download models using huggingface-cli:
-``` sh
-pip install "huggingface_hub[cli]"
-huggingface-cli download Wan-AI/Wan2.2-T2V-A14B --local-dir ./Wan2.2-T2V-A14B
-```
-
-Download models using modelscope-cli:
-``` sh
-pip install modelscope
-modelscope download Wan-AI/Wan2.2-T2V-A14B --local_dir ./Wan2.2-T2V-A14B
-```
-
-#### Run Text-to-Video Generation
-
-This repository supports the `Wan2.2-T2V-A14B` Text-to-Video model and can simultaneously support video generation at 480P and 720P resolutions.
-
-
-##### (1) Without Prompt Extension
-
-To facilitate implementation, we will start with a basic version of the inference process that skips the [prompt extension](#2-using-prompt-extention) step.
-
-- Single-GPU inference
-
-``` sh
-python generate.py  --task t2v-A14B --size 1280*720 --ckpt_dir ./Wan2.2-T2V-A14B --offload_model True --convert_model_dtype --prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
-```
-
-> 💡 This command can run on a GPU with at least 80GB VRAM.
-
-> 💡If you encounter OOM (Out-of-Memory) issues, you can use the `--offload_model True`, `--convert_model_dtype` and `--t5_cpu` options to reduce GPU memory usage.
-
-
-- Multi-GPU inference using FSDP + DeepSpeed Ulysses
-
-  We use [PyTorch FSDP](https://docs.pytorch.org/docs/stable/fsdp.html) and [DeepSpeed Ulysses](https://arxiv.org/abs/2309.14509) to accelerate inference.
-
-
-``` sh
-torchrun --nproc_per_node=8 generate.py --task t2v-A14B --size 1280*720 --ckpt_dir ./Wan2.2-T2V-A14B --dit_fsdp --t5_fsdp --ulysses_size 8 --prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
-```
-
-
-##### (2) Using Prompt Extension
-
-Extending the prompts can effectively enrich the details in the generated videos, further enhancing the video quality. Therefore, we recommend enabling prompt extension. We provide the following two methods for prompt extension:
-
-- Use the Dashscope API for extension.
-  - Apply for a `dashscope.api_key` in advance ([EN](https://www.alibabacloud.com/help/en/model-studio/getting-started/first-api-call-to-qwen) | [CN](https://help.aliyun.com/zh/model-studio/getting-started/first-api-call-to-qwen)).
-  - Configure the environment variable `DASH_API_KEY` to specify the Dashscope API key. For users of Alibaba Cloud's international site, you also need to set the environment variable `DASH_API_URL` to 'https://dashscope-intl.aliyuncs.com/api/v1'. For more detailed instructions, please refer to the [dashscope document](https://www.alibabacloud.com/help/en/model-studio/developer-reference/use-qwen-by-calling-api?spm=a2c63.p38356.0.i1).
-  - Use the `qwen-plus` model for text-to-video tasks and `qwen-vl-max` for image-to-video tasks.
-  - You can modify the model used for extension with the parameter `--prompt_extend_model`. For example:
-```sh
-DASH_API_KEY=your_key torchrun --nproc_per_node=8 generate.py  --task t2v-A14B --size 1280*720 --ckpt_dir ./Wan2.2-T2V-A14B --dit_fsdp --t5_fsdp --ulysses_size 8 --prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage" --use_prompt_extend --prompt_extend_method 'dashscope' --prompt_extend_target_lang 'zh'
-```
-
-- Using a local model for extension.
-
-  - By default, the Qwen model on HuggingFace is used for this extension. Users can choose Qwen models or other models based on the available GPU memory size.
-  - For text-to-video tasks, you can use models like `Qwen/Qwen2.5-14B-Instruct`, `Qwen/Qwen2.5-7B-Instruct` and `Qwen/Qwen2.5-3B-Instruct`.
-  - For image-to-video tasks, you can use models like `Qwen/Qwen2.5-VL-7B-Instruct` and `Qwen/Qwen2.5-VL-3B-Instruct`.
-  - Larger models generally provide better extension results but require more GPU memory.
-  - You can modify the model used for extension with the parameter `--prompt_extend_model` , allowing you to specify either a local model path or a Hugging Face model. For example:
-
-``` sh
-torchrun --nproc_per_node=8 generate.py  --task t2v-A14B --size 1280*720 --ckpt_dir ./Wan2.2-T2V-A14B --dit_fsdp --t5_fsdp --ulysses_size 8 --prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage" --use_prompt_extend --prompt_extend_method 'local_qwen' --prompt_extend_target_lang 'zh'
-```
-
-
-#### Run Image-to-Video Generation
-
-This repository supports the `Wan2.2-I2V-A14B` Image-to-Video model and can simultaneously support video generation at 480P and 720P resolutions.
-
-
-- Single-GPU inference
-```sh
-python generate.py --task i2v-A14B --size 1280*720 --ckpt_dir ./Wan2.2-I2V-A14B --offload_model True --convert_model_dtype --image examples/i2v_input.JPG --prompt "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside."
-```
-
-> This command can run on a GPU with at least 80GB VRAM.
-
-> 💡For the Image-to-Video task, the `size` parameter represents the area of the generated video, with the aspect ratio following that of the original input image.
-
-
-- Multi-GPU inference using FSDP + DeepSpeed Ulysses
-
-```sh
-torchrun --nproc_per_node=8 generate.py --task i2v-A14B --size 1280*720 --ckpt_dir ./Wan2.2-I2V-A14B --image examples/i2v_input.JPG --dit_fsdp --t5_fsdp --ulysses_size 8 --prompt "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside."
-```
-
-- Image-to-Video Generation without prompt
-
-```sh
-DASH_API_KEY=your_key torchrun --nproc_per_node=8 generate.py --task i2v-A14B --size 1280*720 --ckpt_dir ./Wan2.2-I2V-A14B --prompt '' --image examples/i2v_input.JPG --dit_fsdp --t5_fsdp --ulysses_size 8 --use_prompt_extend --prompt_extend_method 'dashscope'
-```
-
-> 💡The model can generate videos solely from the input image. You can use prompt extension to generate prompt from the image.
-
-> The process of prompt extension can be referenced [here](#2-using-prompt-extention).
-
-#### Run Text-Image-to-Video Generation
-
-This repository supports the `Wan2.2-TI2V-5B` Text-Image-to-Video model and can support video generation at 720P resolutions.
-
-
-- Single-GPU Text-to-Video inference
-```sh
-python generate.py --task ti2v-5B --size 1280*704 --ckpt_dir ./Wan2.2-TI2V-5B --offload_model True --convert_model_dtype --t5_cpu --prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage"
-```
-
-> 💡Unlike other tasks, the 720P resolution of the Text-Image-to-Video task is `1280*704` or `704*1280`.
-
-> This command can run on a GPU with at least 24GB VRAM (e.g, RTX 4090 GPU).
-
-> 💡If you are running on a GPU with at least 80GB VRAM, you can remove the `--offload_model True`, `--convert_model_dtype` and `--t5_cpu` options to speed up execution.
-
-
-- Single-GPU Image-to-Video inference
-```sh
-python generate.py --task ti2v-5B --size 1280*704 --ckpt_dir ./Wan2.2-TI2V-5B --offload_model True --convert_model_dtype --t5_cpu --image examples/i2v_input.JPG --prompt "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside."
-```
-
-> 💡If the image parameter is configured, it is an Image-to-Video generation; otherwise, it defaults to a Text-to-Video generation.
-
-> 💡Similar to Image-to-Video, the `size` parameter represents the area of the generated video, with the aspect ratio following that of the original input image.
-
-
-- Multi-GPU inference using FSDP + DeepSpeed Ulysses
-
-```sh
-torchrun --nproc_per_node=8 generate.py --task ti2v-5B --size 1280*704 --ckpt_dir ./Wan2.2-TI2V-5B --dit_fsdp --t5_fsdp --ulysses_size 8 --image examples/i2v_input.JPG --prompt "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside."
-```
-
-> The process of prompt extension can be referenced [here](#2-using-prompt-extention).
-
-#### Run Speech-to-Video Generation
-
-This repository supports the `Wan2.2-S2V-14B` Speech-to-Video model and can simultaneously support video generation at 480P and 720P resolutions.
-
-- Single-GPU Speech-to-Video inference
-
-```sh
-python generate.py  --task s2v-14B --size 1024*704 --ckpt_dir ./Wan2.2-S2V-14B/ --offload_model True --convert_model_dtype --prompt "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard."  --image "examples/i2v_input.JPG" --audio "examples/talk.wav"
-# Without setting --num_clip, the generated video length will automatically adjust based on the input audio length
-
-# You can use CosyVoice to generate audio with --enable_tts
-python generate.py  --task s2v-14B --size 1024*704 --ckpt_dir ./Wan2.2-S2V-14B/ --offload_model True --convert_model_dtype --prompt "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard."  --image "examples/i2v_input.JPG" --enable_tts --tts_prompt_audio "examples/zero_shot_prompt.wav" --tts_prompt_text "希望你以后能够做的比我还好呦。" --tts_text "收到好友从远方寄来的生日礼物，那份意外的惊喜与深深的祝福让我心中充满了甜蜜的快乐，笑容如花儿般绽放。"
-```
-
-> 💡 This command can run on a GPU with at least 80GB VRAM.
-
-- Multi-GPU inference using FSDP + DeepSpeed Ulysses
-
-```sh
-torchrun --nproc_per_node=8 generate.py --task s2v-14B --size 1024*704 --ckpt_dir ./Wan2.2-S2V-14B/ --dit_fsdp --t5_fsdp --ulysses_size 8 --prompt "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard." --image "examples/i2v_input.JPG" --audio "examples/talk.wav"
-```
-
-- Pose + Audio driven generation
-
-```sh
-torchrun --nproc_per_node=8 generate.py --task s2v-14B --size 1024*704 --ckpt_dir ./Wan2.2-S2V-14B/ --dit_fsdp --t5_fsdp --ulysses_size 8 --prompt "a person is singing" --image "examples/pose.png" --audio "examples/sing.MP3" --pose_video "./examples/pose.mp4" 
-```
-
-> 💡For the Speech-to-Video task, the `size` parameter represents the area of the generated video, with the aspect ratio following that of the original input image.
-
-> 💡The model can generate videos from audio input combined with reference image and optional text prompt.
-
-> 💡The `--pose_video` parameter enables pose-driven generation, allowing the model to follow specific pose sequences while generating videos synchronized with audio input.
-
-> 💡The `--num_clip` parameter controls the number of video clips generated, useful for quick preview with shorter generation time.
-
-Please visit our project page to see more examples and learn about the scenarios suitable for this model.
-
-#### Run Wan-Animate 
-
-Wan-Animate takes a video and a character image as input, and generates a video in either "animation" or "replacement" mode. 
-
-1. animation mode： The model generates a video of the character image that mimics the human motion in the input video.
-2. replacement mode: The model replaces the character image with the input video.
-
-Please visit our [project page](https://humanaigc.github.io/wan-animate) to see more examples and learn about the scenarios suitable for this model.
-
-##### (1) Preprocessing 
-The input video should be preprocessed into several materials before be feed into the inference process.  Please refer to the following processing flow, and more details about preprocessing can be found in [UserGuider](https://github.com/Wan-Video/Wan2.2/blob/main/wan/modules/animate/preprocess/UserGuider.md).
-
-* For animation
-```bash
-python ./wan/modules/animate/preprocess/preprocess_data.py \
-    --ckpt_path ./Wan2.2-Animate-14B/process_checkpoint \
-    --video_path ./examples/wan_animate/animate/video.mp4 \
-    --refer_path ./examples/wan_animate/animate/image.jpeg \
-    --save_path ./examples/wan_animate/animate/process_results \
-    --resolution_area 1280 720 \
-    --retarget_flag \
-    --use_flux
-```
-* For replacement
-```bash
-python ./wan/modules/animate/preprocess/preprocess_data.py \
-    --ckpt_path ./Wan2.2-Animate-14B/process_checkpoint \
-    --video_path ./examples/wan_animate/replace/video.mp4 \
-    --refer_path ./examples/wan_animate/replace/image.jpeg \
-    --save_path ./examples/wan_animate/replace/process_results \
-    --resolution_area 1280 720 \
-    --iterations 3 \
-    --k 7 \
-    --w_len 1 \
-    --h_len 1 \
-    --replace_flag
-```
-##### (2) Run in animation mode 
-
-* Single-GPU inference 
+在 `docker` 目录下执行：
 
 ```bash
-python generate.py --task animate-14B --ckpt_dir ./Wan2.2-Animate-14B/ --src_root_path ./examples/wan_animate/animate/process_results/ --refert_num 1
+cd docker
+docker-compose up -d --build
 ```
 
-* Multi-GPU inference using FSDP + DeepSpeed Ulysses
+说明：
+
+- 首次启动会下载 **Wan2.2-TI2V-5B**（约 20GB+），支持断点续传
+- 模型目录挂载到宿主机 `./Wan2.2-TI2V-5B`，输出目录挂载到 `./output`
+- 启动成功后日志中会出现 `WanTI2V ready` 与 `API listening on 0.0.0.0:8000`
+
+查看日志：
 
 ```bash
-python -m torch.distributed.run --nnodes 1 --nproc_per_node 8 generate.py --task animate-14B --ckpt_dir ./Wan2.2-Animate-14B/ --src_root_path ./examples/wan_animate/animate/process_results/ --refert_num 1 --dit_fsdp --t5_fsdp --ulysses_size 8
+docker logs wan -f
 ```
 
-* Diffusers Pipeline
-
-```python
-from diffusers import WanAnimatePipeline
-from diffusers.utils import export_to_video, load_image, load_video
-
-device = "cuda:0"
-dtype = torch.bfloat16
-model_id = "Wan-AI/Wan2.2-Animate-14B-Diffusers"
-pipe = WanAnimatePipeline.from_pretrained(model_id torch_dtype=dtype)
-pipe.to(device)
-
-seed = 42
-prompt = "People in the video are doing actions."
-
-# Animation
-image = load_image("/path/to/animate/reference/image/src_ref.png")
-pose_video = load_video("/path/to/animate/pose/video/src_pose.mp4")
-face_video = load_video("/path/to/animate/face/video/src_face.mp4")
-
-animate_video = pipe(
-    image=image,
-    pose_video=pose_video,
-    face_video=face_video,
-    prompt=prompt,
-    mode="animate",
-    segment_frame_length=77,  # clip_len in original code
-    prev_segment_conditioning_frames=1,  # refert_num in original code
-    guidance_scale=1.0,
-    num_inference_steps=20,
-    generator=torch.Generator(device=device).manual_seed(seed),
-).frames[0]
-export_to_video(animate_video, "diffusers_animate.mp4", fps=30)
-```
-
-##### (3) Run in replacement mode 
-
-* Single-GPU inference 
+健康检查：
 
 ```bash
-python generate.py --task animate-14B --ckpt_dir ./Wan2.2-Animate-14B/ --src_root_path ./examples/wan_animate/replace/process_results/ --refert_num 1 --replace_flag --use_relighting_lora 
+curl http://127.0.0.1:8000/health
 ```
 
-* Multi-GPU inference using FSDP + DeepSpeed Ulysses
+返回示例：
+
+```json
+{"status":"ok","model":"Wan2.2-TI2V-5B","ready":true}
+```
+
+`ready` 为 `true` 表示模型已加载完成，可以调用生成接口。
+
+## 环境变量
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `DOWNLOAD_URL` | `http://127.0.0.1/` | 将容器内路径 `/app/` 替换为该前缀，得到可下载的 URL |
+| `MODEL_SOURCE` | `huggingface` | 模型来源：`huggingface` 或 `modelscope` |
+| `HF_ENDPOINT` | `https://huggingface.co` | Hugging Face 镜像地址，国内可用 `https://hf-mirror.com` |
+| `HF_TOKEN` | 空 | Hugging Face Token（可选） |
+| `MODELSCOPE_TOKEN` | 空 | ModelScope Token（可选） |
+
+示例（国内优先用 ModelScope）：
 
 ```bash
-python -m torch.distributed.run --nnodes 1 --nproc_per_node 8 generate.py --task animate-14B --ckpt_dir ./Wan2.2-Animate-14B/ --src_root_path ./examples/wan_animate/replace/process_results/src_pose.mp4  --refert_num 1 --replace_flag --use_relighting_lora --dit_fsdp --t5_fsdp --ulysses_size 8
+MODEL_SOURCE=modelscope docker-compose up -d
 ```
 
-* Diffusers Pipeline
+示例（使用 Hugging Face 镜像站）：
 
-```python
-# create pipeline as in the Animation code ☝️
-
-# Replacement
-image = load_image("/path/to/replace/reference/image/src_ref.png")
-pose_video = load_video("/path/to/replace/pose/video/src_pose.mp4")
-face_video = load_video("/path/to/replace/face/video/src_face.mp4")
-background_video = load_video("/path/to/replace/background/video/src_bg.mp4")
-mask_video = load_video("/path/to/replace/mask/video/src_mask.mp4")
-
-replace_video = pipe(
-    image=image,
-    pose_video=pose_video,
-    face_video=face_video,
-    background_video=background_video,
-    mask_video=mask_video,
-    prompt=prompt,
-    mode="replace",
-    segment_frame_length=77,  # clip_len in original code
-    prev_segment_conditioning_frames=1,  # refert_num in original code
-    guidance_scale=1.0,
-    num_inference_steps=20,
-    generator=torch.Generator(device=device).manual_seed(seed),
-).frames[0]
-export_to_video(replace_video, "diffusers_replace.mp4", fps=30)
+```bash
+HF_ENDPOINT=https://hf-mirror.com docker-compose up -d
 ```
 
-> 💡 If you're using **Wan-Animate**, we do not recommend using LoRA models trained on `Wan2.2`, since weight changes during training may lead to unexpected behavior.
+## 目录约定
 
-## Computational Efficiency on Different GPUs
+| 宿主机 | 容器内 | 说明 |
+| --- | --- | --- |
+| `docker/Wan2.2-TI2V-5B` | `/app/Wan2.2-TI2V-5B` | 模型权重（断点续传缓存也在此） |
+| `docker/output` | `/app/output` | 生成的视频文件 |
 
-We test the computational efficiency of different **Wan2.2** models on different GPUs in the following table. The results are presented in the format: **Total time (s) / peak GPU memory (GB)**.
+输出 URL 规则：将容器路径中的 `/app/` 替换为 `DOWNLOAD_URL`。
 
+例如：
 
-<div align="center">
-    <img src="assets/comp_effic.png" alt="" style="width: 80%;" />
-</div>
+- 容器路径：`/app/output/t2v_xxx.mp4`
+- `DOWNLOAD_URL=http://127.0.0.1/`
+- 返回 URL：`http://127.0.0.1/output/t2v_xxx.mp4`
 
-> The parameter settings for the tests presented in this table are as follows:
-> (1) Multi-GPU: 14B: `--ulysses_size 4/8 --dit_fsdp --t5_fsdp`, 5B: `--ulysses_size 4/8 --offload_model True --convert_model_dtype --t5_cpu`; Single-GPU: 14B: `--offload_model True --convert_model_dtype`, 5B: `--offload_model True --convert_model_dtype --t5_cpu`
-(--convert_model_dtype converts model parameter types to config.param_dtype);
-> (2) The distributed testing utilizes the built-in FSDP and Ulysses implementations, with FlashAttention3 deployed on Hopper architecture GPUs;
-> (3) Tests were run without the `--use_prompt_extend` flag;
-> (4) Reported results are the average of multiple samples taken after the warm-up phase.
+## RESTful API
 
+默认地址：`http://127.0.0.1:8000`  
+交互式文档：`http://127.0.0.1:8000/docs`
 
--------
+### 1. 服务信息
 
-## Introduction of Wan2.2
+`GET /`
 
-**Wan2.2** builds on the foundation of Wan2.1 with notable improvements in generation quality and model capability. This upgrade is driven by a series of key technical innovations, mainly including the Mixture-of-Experts (MoE) architecture, upgraded training data, and high-compression video generation.
-
-##### (1) Mixture-of-Experts (MoE) Architecture
-
-Wan2.2 introduces Mixture-of-Experts (MoE) architecture into the video generation diffusion model. MoE has been widely validated in large language models as an efficient approach to increase total model parameters while keeping inference cost nearly unchanged. In Wan2.2, the A14B model series adopts a two-expert design tailored to the denoising process of diffusion models: a high-noise expert for the early stages, focusing on overall layout; and a low-noise expert for the later stages, refining video details. Each expert model has about 14B parameters, resulting in a total of 27B parameters but only 14B active parameters per step, keeping inference computation and GPU memory nearly unchanged.
-
-<div align="center">
-    <img src="assets/moe_arch.png" alt="" style="width: 90%;" />
-</div>
-
-The transition point between the two experts is determined by the signal-to-noise ratio (SNR), a metric that decreases monotonically as the denoising step $t$ increases. At the beginning of the denoising process, $t$ is large and the noise level is high, so the SNR is at its minimum, denoted as ${SNR}_{min}$. In this stage, the high-noise expert is activated. We define a threshold step ${t}_{moe}$ corresponding to half of the ${SNR}_{min}$, and switch to the low-noise expert when $t<{t}_{moe}$.
-
-<div align="center">
-    <img src="assets/moe_2.png" alt="" style="width: 90%;" />
-</div>
-
-To validate the effectiveness of the MoE architecture, four settings are compared based on their validation loss curves. The baseline **Wan2.1** model does not employ the MoE architecture. Among the MoE-based variants, the **Wan2.1 & High-Noise Expert** reuses the Wan2.1 model as the low-noise expert while uses the  Wan2.2's high-noise expert, while the **Wan2.1 & Low-Noise Expert** uses Wan2.1 as the high-noise expert and employ the Wan2.2's low-noise expert. The **Wan2.2 (MoE)** (our final version) achieves the lowest validation loss, indicating that its generated video distribution is closest to ground-truth and exhibits superior convergence.
-
-
-##### (2) Efficient High-Definition Hybrid TI2V
-To enable more efficient deployment, Wan2.2 also explores a high-compression design. In addition to the 27B MoE models, a 5B dense model, i.e., TI2V-5B, is released. It is supported by a high-compression Wan2.2-VAE, which achieves a $T\times H\times W$ compression ratio of $4\times16\times16$, increasing the overall compression rate to 64 while maintaining high-quality video reconstruction. With an additional patchification layer, the total compression ratio of TI2V-5B reaches $4\times32\times32$. Without specific optimization, TI2V-5B can generate a 5-second 720P video in under 9 minutes on a single consumer-grade GPU, ranking among the fastest 720P@24fps video generation models. This model also natively supports both text-to-video and image-to-video tasks within a single unified framework, covering both academic research and practical applications.
-
-
-<div align="center">
-    <img src="assets/vae.png" alt="" style="width: 80%;" />
-</div>
-
-
-
-##### Comparisons to SOTAs
-We compared Wan2.2 with leading closed-source commercial models on our new Wan-Bench 2.0, evaluating performance across multiple crucial dimensions. The results demonstrate that Wan2.2 achieves superior performance compared to these leading models.
-
-
-<div align="center">
-    <img src="assets/performance.png" alt="" style="width: 90%;" />
-</div>
-
-## Citation
-If you find our work helpful, please cite us.
-
+```bash
+curl http://127.0.0.1:8000/
 ```
-@article{wan2025,
-      title={Wan: Open and Advanced Large-Scale Video Generative Models}, 
-      author={Team Wan and Ang Wang and Baole Ai and Bin Wen and Chaojie Mao and Chen-Wei Xie and Di Chen and Feiwu Yu and Haiming Zhao and Jianxiao Yang and Jianyuan Zeng and Jiayu Wang and Jingfeng Zhang and Jingren Zhou and Jinkai Wang and Jixuan Chen and Kai Zhu and Kang Zhao and Keyu Yan and Lianghua Huang and Mengyang Feng and Ningyi Zhang and Pandeng Li and Pingyu Wu and Ruihang Chu and Ruili Feng and Shiwei Zhang and Siyang Sun and Tao Fang and Tianxing Wang and Tianyi Gui and Tingyu Weng and Tong Shen and Wei Lin and Wei Wang and Wei Wang and Wenmeng Zhou and Wente Wang and Wenting Shen and Wenyuan Yu and Xianzhong Shi and Xiaoming Huang and Xin Xu and Yan Kou and Yangyu Lv and Yifei Li and Yijing Liu and Yiming Wang and Yingya Zhang and Yitong Huang and Yong Li and You Wu and Yu Liu and Yulin Pan and Yun Zheng and Yuntao Hong and Yupeng Shi and Yutong Feng and Zeyinzi Jiang and Zhen Han and Zhi-Fan Wu and Ziyu Liu},
-      journal = {arXiv preprint arXiv:2503.20314},
-      year={2025}
+
+### 2. 健康检查
+
+`GET /health`
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+### 3. 文生视频（t2v）
+
+`POST /t2v`  
+`Content-Type: application/json`
+
+请求参数：
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `prompt` | string | 是 | - | 文本提示词 |
+| `negative_prompt` | string | 否 | `""` | 负向提示词 |
+| `size` | string | 否 | `1280*704` | 分辨率，仅支持 `1280*704` 或 `704*1280` |
+| `frame_num` | int | 否 | `121` | 帧数，须为 `4n+1` |
+| `seed` | int | 否 | `-1` | 随机种子，`-1` 表示随机 |
+| `sample_steps` | int | 否 | 模型默认 | 采样步数 |
+| `sample_shift` | float | 否 | 模型默认 | Flow Matching shift |
+| `guide_scale` | float | 否 | 模型默认 | CFG 引导系数 |
+| `sample_solver` | string | 否 | `unipc` | 采样器：`unipc` 或 `dpm++` |
+
+示例：
+
+```bash
+curl -X POST http://127.0.0.1:8000/t2v \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "两只拟人化的猫穿着拳击装备，在聚光灯舞台上激烈对打",
+    "size": "1280*704",
+    "frame_num": 121,
+    "seed": -1
+  }'
+```
+
+成功响应示例：
+
+```json
+{
+  "task": "t2v",
+  "video_path": "/app/output/t2v_20260829_120000_ab12cd34.mp4",
+  "video_url": "http://127.0.0.1/output/t2v_20260829_120000_ab12cd34.mp4",
+  "seed": 123456789
 }
 ```
 
-## License Agreement
-The models in this repository are licensed under the Apache 2.0 License. We claim no rights over the your generated contents, granting you the freedom to use them while ensuring that your usage complies with the provisions of this license. You are fully accountable for your use of the models, which must not involve sharing any content that violates applicable laws, causes harm to individuals or groups, disseminates personal information intended for harm, spreads misinformation, or targets vulnerable populations. For a complete list of restrictions and details regarding your rights, please refer to the full text of the [license](LICENSE.txt).
+### 4. 图生视频（i2v）
 
+`POST /i2v`  
+`Content-Type: application/json`
 
-## Acknowledgements
+在 t2v 参数基础上增加：
 
-We would like to thank the contributors to the [SD3](https://huggingface.co/stabilityai/stable-diffusion-3-medium), [Qwen](https://huggingface.co/Qwen), [umt5-xxl](https://huggingface.co/google/umt5-xxl), [diffusers](https://github.com/huggingface/diffusers) and [HuggingFace](https://huggingface.co) repositories, for their open research.
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `image_url` | string | 是 | 输入图片 URL，**必须是 http 或 https** |
 
+说明：
 
+- 服务会从 `image_url` 下载图片后生成视频
+- `size` 表示目标像素面积，输出宽高比会尽量跟随输入图片
 
-## Contact Us
-If you would like to leave a message to our research or product teams, feel free to join our [Discord](https://discord.gg/AKNgpMK4Yj) or [WeChat groups](https://gw.alicdn.com/imgextra/i2/O1CN01tqjWFi1ByuyehkTSB_!!6000000000015-0-tps-611-1279.jpg)!
+示例：
 
+```bash
+curl -X POST http://127.0.0.1:8000/i2v \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "夏日海滩度假风格，一只戴墨镜的白猫坐在冲浪板上",
+    "image_url": "https://example.com/cat.jpg",
+    "size": "1280*704",
+    "frame_num": 121
+  }'
+```
+
+成功响应示例：
+
+```json
+{
+  "task": "i2v",
+  "video_path": "/app/output/i2v_20260829_120100_ef56gh78.mp4",
+  "video_url": "http://127.0.0.1/output/i2v_20260829_120100_ef56gh78.mp4",
+  "seed": 987654321
+}
+```
+
+## 常用运维命令
+
+```bash
+# 启动 / 重建
+cd docker
+docker-compose up -d --build
+
+# 停止
+docker-compose down
+
+# 查看日志
+docker logs wan -f
+
+# 查看容器状态
+docker ps
+```
+
+## 注意事项
+
+1. 模型下载与加载期间，`/health` 中 `ready` 可能为 `false`，此时调用 `/t2v`、`/i2v` 会返回 `503`
+2. 生成接口为同步调用，耗时较长，请适当增大客户端超时时间
+3. 若容器反复重启且日志停在 `loading WanTI2V`，多为内存不足（OOM），请检查 Docker 内存限制与宿主机可用内存
+4. 访问不了 Hugging Face 时，请设置 `MODEL_SOURCE=modelscope` 或 `HF_ENDPOINT=https://hf-mirror.com`
