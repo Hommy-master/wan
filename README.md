@@ -1,10 +1,13 @@
 # Wan2.2 TI2V-5B（ComfyUI）Docker 部署与 API 说明
 
-基于 **ComfyUI** 运行 [Wan2.2-TI2V-5B](https://github.com/Wan-Video/Wan2.2)，对外提供 RESTful API，支持：
+基于 **ComfyUI** 运行 [Wan2.2-TI2V-5B](https://github.com/Wan-Video/Wan2.2)，对外提供 **异步** RESTful API，支持：
 
-- **文生视频** `POST /t2v`
-- **图生视频** `POST /i2v`
-- **首尾帧生视频** `POST /flf2v`
+- **文生视频** `POST /t2v` → 返回 `task_id`
+- **图生视频** `POST /i2v` → 返回 `task_id`
+- **首尾帧生视频** `POST /flf2v` → 返回 `task_id`
+- **查询任务** `GET /tasks/{task_id}` → 进度与结果
+
+同一时间 **仅执行 1 个生成任务**；新请求进入队列等待。
 
 容器启动后会自动下载 ComfyUI 格式模型（支持断点续传），拉起 ComfyUI，再启动 FastAPI 网关（默认端口 `8000`）。
 
@@ -60,6 +63,7 @@ models/
 | `HF_ENDPOINT` | `https://huggingface.co` | Hugging Face 地址；国内可用 `https://hf-mirror.com` |
 | `HF_TOKEN` | 空 | Hugging Face Token（可选） |
 | `COMFY_POLL_TIMEOUT` | `7200` | 单次生成最长等待秒数 |
+| `MAX_QUEUE_SIZE` | `32` | 等待队列上限（不含正在执行的任务） |
 
 输出 URL 示例：
 
@@ -67,7 +71,55 @@ models/
 - `DOWNLOAD_URL=http://127.0.0.1/`
 - 返回：`http://127.0.0.1/output/t2v_xxx.mp4`
 
-## RESTful API
+## RESTful API（异步）
+
+### 调用流程
+
+1. `POST /t2v`（或 `/i2v` / `/flf2v`）提交任务，立即返回 `task_id`
+2. 轮询 `GET /tasks/{task_id}` 查看 `status` / `progress`
+3. `status=succeeded` 时读取 `video_path` / `video_url`
+
+### 提交响应
+
+```json
+{
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "task": "t2v",
+  "status": "queued",
+  "message": "accepted"
+}
+```
+
+### 查询任务 `GET /tasks/{task_id}`
+
+| 字段 | 说明 |
+| --- | --- |
+| `status` | `queued` / `running` / `succeeded` / `failed` |
+| `progress` | `0.0`～`1.0` |
+| `message` | 当前阶段说明 |
+| `seed` | 实际使用的种子 |
+| `video_path` / `video_url` | 成功时才有 |
+| `error` | 失败原因 |
+
+成功示例：
+
+```json
+{
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "task": "t2v",
+  "status": "succeeded",
+  "progress": 1.0,
+  "message": "succeeded",
+  "seed": 123456789,
+  "video_path": "/app/output/t2v_20260829_210000_ab12cd34.mp4",
+  "video_url": "http://127.0.0.1/output/t2v_20260829_210000_ab12cd34.mp4",
+  "error": null,
+  "created_at": "2026-08-30T02:00:00+00:00",
+  "updated_at": "2026-08-30T02:35:00+00:00",
+  "started_at": "2026-08-30T02:00:01+00:00",
+  "finished_at": "2026-08-30T02:35:00+00:00"
+}
+```
 
 ### 公共参数
 
@@ -81,17 +133,6 @@ models/
 | `sample_steps` | int | `20` | 采样步数（3060 可试 `12~20`） |
 | `sample_shift` | float | `8.0` | ModelSamplingSD3 shift |
 | `guide_scale` | float | `5.0` | CFG |
-
-成功响应示例：
-
-```json
-{
-  "task": "t2v",
-  "video_path": "/app/output/t2v_20260829_210000_ab12cd34.mp4",
-  "video_url": "http://127.0.0.1/output/t2v_20260829_210000_ab12cd34.mp4",
-  "seed": 123456789
-}
-```
 
 ### 1. 文生视频
 
@@ -143,19 +184,36 @@ curl -X POST http://127.0.0.1:8000/flf2v \
   }'
 ```
 
+### 查询进度与结果
+
+```bash
+curl http://127.0.0.1:8000/tasks/<task_id>
+```
+
 ### 健康检查
 
 `GET /health`
 
 ```json
-{"status":"ok","model":"Wan2.2-TI2V-5B","engine":"ComfyUI","ready":true}
+{
+  "status": "ok",
+  "model": "Wan2.2-TI2V-5B",
+  "engine": "ComfyUI",
+  "ready": true,
+  "queue": {
+    "queued": 0,
+    "running_task_id": null,
+    "max_concurrent": 1,
+    "max_queue_size": 32
+  }
+}
 ```
 
 ## 实现说明
 
 - 推理引擎：ComfyUI（官方 Wan2.2 5B 节点）
 - 首尾帧：自定义节点 [Wan22FirstLastFrameToVideoLatent](https://github.com/stduhpf/ComfyUI--Wan22FirstLastFrameToVideoLatent)
-- 网关：`server.py` 将 REST 请求转为 ComfyUI `/prompt` 工作流并回写 `/app/output`
+- 网关：`server.py` 异步任务队列 + 单 worker；进度可经 ComfyUI WebSocket 更新
 - 工作流模板：`docker/workflows/{t2v,i2v,flf2v}_api.json`
 
 ## 常用命令
@@ -176,6 +234,7 @@ HF_ENDPOINT=https://hf-mirror.com docker-compose up -d
 ## 注意事项
 
 1. 首次启动需下载约十余 GB 模型，请保持 `docker/models` 挂载以便续传
-2. 生成接口为同步调用，耗时较长，请加大客户端超时
-3. 3060 12GB 建议 `sample_steps=12~20`，并保证系统内存充足
-4. `ready=false` 时不要调用生成接口（ComfyUI 尚未就绪）
+2. 生成接口为异步：提交立即返回；请轮询 `GET /tasks/{task_id}`
+3. 同一时间只执行 1 个任务，其余排队；队列满返回 `429`
+4. 3060 12GB 建议 `sample_steps=12~20`，并保证系统内存充足
+5. `ready=false` 时不要提交任务（ComfyUI 尚未就绪）

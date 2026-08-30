@@ -18,6 +18,9 @@ mkdir -p "${OUTPUT_DIR}" \
 echo "[entrypoint] ensure models..."
 python -u "${APP_ROOT}/docker/download_models.py"
 
+echo "[entrypoint] patch comfy_kitchen for torch compatibility..."
+python -u "${APP_ROOT}/docker/patch_comfy_kitchen.py" || true
+
 echo "[entrypoint] start ComfyUI on :${COMFY_PORT}"
 cd "${COMFYUI_DIR}"
 python -u main.py \

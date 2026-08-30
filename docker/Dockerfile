@@ -21,18 +21,15 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg \
-        libgl1 \
-        libglib2.0-0 \
-        curl \
-        git \
-        build-essential \
-    && rm -rf /var/lib/apt/lists/*
+# Avoid flaky apt mirrors: install system tools via conda (bundled in base image)
+RUN conda install -y -c conda-forge git ffmpeg curl \
+    && conda clean -afy
 
-# ComfyUI
+# ComfyUI (+ China-friendly pip index as fallback)
 RUN git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git /app/ComfyUI \
-    && pip install --no-cache-dir -r /app/ComfyUI/requirements.txt
+    && (pip install --no-cache-dir -r /app/ComfyUI/requirements.txt \
+        || pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r /app/ComfyUI/requirements.txt) \
+    && python -c "import pathlib,site; print('comfy_kitchen check'); import importlib.util; print(importlib.util.find_spec('comfy_kitchen'))"
 
 # First/Last frame node for Wan2.2 5B VAE
 RUN git clone --depth 1 -b master \
@@ -41,16 +38,19 @@ RUN git clone --depth 1 -b master \
 
 COPY docker/api-requirements.txt /tmp/api-requirements.txt
 RUN sed -i 's/\r$//' /tmp/api-requirements.txt \
-    && pip install --no-cache-dir -r /tmp/api-requirements.txt \
+    && (pip install --no-cache-dir -r /tmp/api-requirements.txt \
+        || pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r /tmp/api-requirements.txt) \
     && rm -rf /tmp/api-requirements.txt /root/.cache/pip
 
 COPY docker/workflows /app/docker/workflows
 COPY docker/download_models.py /app/docker/download_models.py
+COPY docker/patch_comfy_kitchen.py /app/docker/patch_comfy_kitchen.py
 COPY docker/entrypoint.sh /app/docker/entrypoint.sh
 COPY server.py /app/server.py
 
-RUN sed -i 's/\r$//' /app/docker/entrypoint.sh /app/docker/download_models.py \
+RUN sed -i 's/\r$//' /app/docker/entrypoint.sh /app/docker/download_models.py /app/docker/patch_comfy_kitchen.py \
     && chmod +x /app/docker/entrypoint.sh \
+    && python /app/docker/patch_comfy_kitchen.py \
     && mkdir -p \
         /app/output \
         /app/ComfyUI/models/diffusion_models \

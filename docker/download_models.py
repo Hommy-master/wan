@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Download Wan2.2 ComfyUI-repackaged weights with resume support."""
+"""Download Wan2.2 ComfyUI weights with HTTP resume (mirror-friendly)."""
 from __future__ import annotations
 
 import logging
 import os
-import shutil
 import sys
 from pathlib import Path
+from urllib.parse import urljoin
+
+import httpx
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,27 +52,65 @@ def _sanitize_env() -> None:
             os.environ.pop(key, None)
 
 
+def endpoints() -> list[str]:
+    primary = (os.environ.get("HF_ENDPOINT") or "https://huggingface.co").rstrip("/")
+    endpoints_list = [primary]
+    for candidate in ("https://hf-mirror.com", "https://huggingface.co"):
+        if candidate not in endpoints_list:
+            endpoints_list.append(candidate)
+    return endpoints_list
+
+
 def is_complete(path: Path, min_size: int) -> bool:
     return path.is_file() and path.stat().st_size >= min_size
 
 
-def download_file(repo_id: str, remote_path: str, local_path: Path) -> None:
-    from huggingface_hub import hf_hub_download
+def build_url(base: str, repo_id: str, remote_path: str) -> str:
+    return f"{base}/{repo_id}/resolve/main/{remote_path}"
 
+
+def download_file(repo_id: str, remote_path: str, local_path: Path) -> None:
     local_path.parent.mkdir(parents=True, exist_ok=True)
-    logger.info("download %s:%s -> %s", repo_id, remote_path, local_path)
+    partial = local_path.with_suffix(local_path.suffix + ".partial")
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-    cached = hf_hub_download(
-        repo_id=repo_id,
-        filename=remote_path,
-        token=token,
-    )
-    tmp = local_path.with_suffix(local_path.suffix + ".partial")
-    if tmp.exists():
-        tmp.unlink()
-    shutil.copy2(cached, tmp)
-    os.replace(tmp, local_path)
-    logger.info("saved %s (%s bytes)", local_path, local_path.stat().st_size)
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    errors: list[str] = []
+    for base in endpoints():
+        url = build_url(base, repo_id, remote_path)
+        try:
+            logger.info("download %s", url)
+            existing = partial.stat().st_size if partial.is_file() else 0
+            req_headers = dict(headers)
+            if existing > 0:
+                req_headers["Range"] = f"bytes={existing}-"
+                logger.info("resume from byte %s", existing)
+
+            with httpx.Client(timeout=httpx.Timeout(60.0, read=600.0), follow_redirects=True) as client:
+                with client.stream("GET", url, headers=req_headers) as response:
+                    if response.status_code == 416:
+                        # already complete according to server
+                        if partial.is_file():
+                            partial.replace(local_path)
+                        return
+                    if response.status_code not in (200, 206):
+                        raise RuntimeError(f"HTTP {response.status_code}")
+                    mode = "ab" if response.status_code == 206 and existing > 0 else "wb"
+                    if mode == "wb" and partial.exists():
+                        partial.unlink()
+                    with partial.open(mode) as f:
+                        for chunk in response.iter_bytes(1024 * 1024):
+                            f.write(chunk)
+            partial.replace(local_path)
+            logger.info("saved %s (%s bytes)", local_path, local_path.stat().st_size)
+            return
+        except Exception as exc:
+            logger.warning("download via %s failed: %s", base, exc)
+            errors.append(f"{base}: {exc}")
+            continue
+    raise RuntimeError(f"all mirrors failed for {remote_path}: {'; '.join(errors)}")
 
 
 def main() -> None:
@@ -84,7 +124,6 @@ def main() -> None:
         download_file(repo_id, remote_path, dest)
         if not is_complete(dest, min_size):
             raise SystemExit(f"downloaded file still incomplete: {dest}")
-
     logger.info("all ComfyUI Wan2.2 models ready under %s", MODELS_DIR)
 
 
